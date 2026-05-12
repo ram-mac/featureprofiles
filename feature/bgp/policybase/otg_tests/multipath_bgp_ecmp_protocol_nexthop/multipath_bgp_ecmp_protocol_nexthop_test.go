@@ -369,7 +369,7 @@ func configureDUT(t *testing.T, dut *ondatra.DUTDevice) {
 		DUTArea:             isisAreaAddr,
 		DUTSysID:            isisSysID,
 		NetworkInstanceName: deviations.DefaultNetworkInstance(dut),
-		ISISInterfaceNames:  []string{p2.Name(), p3.Name(), p4.Name()},
+		ISISInterfaceNames:  []string{p2.Name(), p3.Name(), p4.Name(), loopbackIntfName},
 	}
 	isisBatch := &gnmi.SetBatch{}
 	cfgplugins.NewISIS(t, dut, isisData, isisBatch)
@@ -457,8 +457,14 @@ func bgpCreateNbr(localAs, peerAs uint32, dut *ondatra.DUTDevice) *oc.NetworkIns
 		bgpNbr.PeerGroup = ygot.String(peerGrpName1)
 		bgpNbr.Enabled = ygot.Bool(true)
 		if nbr.localAddress != "" {
+			localAddressLeaf := nbr.localAddress
+			if nbr.isV4 == true {
+				if dut.Vendor() == ondatra.CISCO {
+					localAddressLeaf = loopbackIntfName
+				}
+			}
 			bgpNbrT := bgpNbr.GetOrCreateTransport()
-			bgpNbrT.LocalAddress = ygot.String(nbr.localAddress)
+			bgpNbrT.LocalAddress = ygot.String(localAddressLeaf)
 		}
 		if nbr.isV4 == true {
 			af4 := bgpNbr.GetOrCreateAfiSafi(oc.BgpTypes_AFI_SAFI_TYPE_IPV4_UNICAST)
