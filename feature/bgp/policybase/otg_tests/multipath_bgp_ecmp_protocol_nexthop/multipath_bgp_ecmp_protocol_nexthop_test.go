@@ -379,6 +379,7 @@ func configureDUT(t *testing.T, dut *ondatra.DUTDevice) {
 	t.Logf("Now configuring BGP config on DUT")
 	// Configure BGP neighbors and peer groups on DUT.
 	dutConfPath := gnmi.OC().NetworkInstance(deviations.DefaultNetworkInstance(dut)).Protocol(oc.PolicyTypes_INSTALL_PROTOCOL_TYPE_BGP, "BGP")
+
 	gnmi.Delete(t, dut, dutConfPath.Config())
 	dutConf := bgpCreateNbr(dutAS, ateAS, dut)
 	gnmi.Replace(t, dut, dutConfPath.Config(), dutConf)
@@ -400,18 +401,72 @@ func enableMultipath(t *testing.T, dut *ondatra.DUTDevice, maxpaths uint32, ipv4
 	bgpPath := gnmi.OC().NetworkInstance(dni).Protocol(oc.PolicyTypes_INSTALL_PROTOCOL_TYPE_BGP, "BGP")
 	bgpProto := gnmi.Get(t, dut, bgpPath.Config())
 	bgp := bgpProto.GetOrCreateBgp()
-	cliConfig := fmt.Sprintf("router bgp %v\nmaximum-paths %v\n", dutAS, maxpaths)
+	cliConfig := ""
+	switch dut.Vendor() {
+	case ondatra.JUNIPER:
+		// Junos requires a forwarding-table export policy to enable per-flow ECMP
+		cliConfig = fmt.Sprintf(`
+				policy-options {
+					policy-statement LBPOLICY {
+						then load-balance per-packet;
+					}
+				}
+				routing-options {
+					forwarding-table {
+						export LBPOLICY;
+					}
+				}
+				protocols {
+					bgp {
+						group %s {
+							multipath;
+						}
+					}
+				}
+			`, peerGrpName1)
+
+	case ondatra.CISCO:
+		instanceStr := "instance BGP"
+		cliConfig = fmt.Sprintf(`
+				router bgp %v %s
+					address-family ipv4 unicast
+					maximum-paths ibgp %v
+					address-family ipv6 unicast
+					maximum-paths ibgp %v
+					neighbor-group %s
+						address-family ipv4 unicast
+						multipath
+						address-family ipv6 unicast
+						multipath
+			`, dutAS, instanceStr, maxpaths, maxpaths, peerGrpName1)
+
+	default:
+		t.Logf("Unsupported vendor: %s", dut.Vendor())
+	}
+	t.Logf("Now applying CLI config for applicable vendor on DUT %s, sleep for 10 seconds", dut.Vendor())
+	helpers.GnmiCLIConfig(t, dut, cliConfig)
+	time.Sleep(10 * time.Second)
+
 	if !deviations.IbgpMultipathPathUnsupported(dut) {
 		if deviations.EnableMultipathUnderAfiSafi(dut) {
 			if ipv4 {
-				bgp.GetOrCreateGlobal().GetOrCreateAfiSafi(oc.BgpTypes_AFI_SAFI_TYPE_IPV4_UNICAST).GetOrCreateUseMultiplePaths().GetOrCreateIbgp().MaximumPaths = ygot.Uint32(maxpaths)
+				if dut.Vendor() == ondatra.CISCO {
+					gnmi.Replace(t, dut, bgpPath.Bgp().Global().AfiSafi(oc.BgpTypes_AFI_SAFI_TYPE_IPV4_UNICAST).UseMultiplePaths().Ibgp().MaximumPaths().Config(), maxpaths)
+				} else {
+					bgp.GetOrCreateGlobal().GetOrCreateAfiSafi(oc.BgpTypes_AFI_SAFI_TYPE_IPV4_UNICAST).GetOrCreateUseMultiplePaths().GetOrCreateIbgp().MaximumPaths = ygot.Uint32(maxpaths)
+				}
 			} else {
-				bgp.GetOrCreateGlobal().GetOrCreateAfiSafi(oc.BgpTypes_AFI_SAFI_TYPE_IPV6_UNICAST).GetOrCreateUseMultiplePaths().GetOrCreateIbgp().MaximumPaths = ygot.Uint32(maxpaths)
+				if dut.Vendor() == ondatra.CISCO {
+					gnmi.Replace(t, dut, bgpPath.Bgp().Global().AfiSafi(oc.BgpTypes_AFI_SAFI_TYPE_IPV6_UNICAST).UseMultiplePaths().Ibgp().MaximumPaths().Config(), maxpaths)
+				} else {
+					bgp.GetOrCreateGlobal().GetOrCreateAfiSafi(oc.BgpTypes_AFI_SAFI_TYPE_IPV6_UNICAST).GetOrCreateUseMultiplePaths().GetOrCreateIbgp().MaximumPaths = ygot.Uint32(maxpaths)
+				}
 			}
 		} else {
 			bgp.GetOrCreateGlobal().GetOrCreateUseMultiplePaths().GetOrCreateIbgp().MaximumPaths = ygot.Uint32(maxpaths)
 		}
 	} else {
+		cliConfig = fmt.Sprintf("router bgp %v\nmaximum-paths %v\n", dutAS, maxpaths)
 		t.Logf("CLI config: \n%v", cliConfig)
 		t.Logf("Now applying CLI config on DUT, sleep for 30 seconds")
 		helpers.GnmiCLIConfig(t, dut, cliConfig)
@@ -762,8 +817,8 @@ func verifyECMPLoadBalance(t *testing.T, ate *ondatra.ATEDevice, pc int, expecte
 	got := 0
 	for i := 2; i <= pc; i++ {
 		framesRx := gnmi.Get(t, ate.OTG(), gnmi.OTG().Port(ate.Port(t, "port"+strconv.Itoa(i)).ID()).Counters().InFrames().State())
-		if framesRx <= lbToleranceFms {
-			t.Logf("Skip: Traffic through port%d interface is %d", i, framesRx)
+		if framesRx <= min {
+			t.Errorf("Traffic through port%d interface is %d, which is less than the expected range: %d - %d", i, framesRx, min, max)
 			continue
 		}
 		if int64(min) < int64(framesRx) && int64(framesRx) < int64(max) {
