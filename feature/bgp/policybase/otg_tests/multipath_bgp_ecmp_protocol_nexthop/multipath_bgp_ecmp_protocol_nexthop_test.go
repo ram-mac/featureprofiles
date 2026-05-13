@@ -402,9 +402,7 @@ func enableMultipath(t *testing.T, dut *ondatra.DUTDevice, maxpaths uint32, ipv4
 	bgpProto := gnmi.Get(t, dut, bgpPath.Config())
 	bgp := bgpProto.GetOrCreateBgp()
 	cliConfig := ""
-	switch dut.Vendor() {
-	case ondatra.JUNIPER:
-		// Junos requires a forwarding-table export policy to enable per-flow ECMP
+	if deviations.PerFlowLoadBalancingUnsupported(dut) {
 		cliConfig = fmt.Sprintf(`
 				policy-options {
 					policy-statement LBPOLICY {
@@ -424,8 +422,11 @@ func enableMultipath(t *testing.T, dut *ondatra.DUTDevice, maxpaths uint32, ipv4
 					}
 				}
 			`, peerGrpName1)
-
-	case ondatra.CISCO:
+		t.Logf("Now applying CLI config for applicable vendor on DUT %s, sleep for 10 seconds", dut.Vendor())
+		helpers.GnmiCLIConfig(t, dut, cliConfig)
+		time.Sleep(10 * time.Second)
+	}
+	if deviations.BgpMultipathPathsUnderPeerGroupUnsupported(dut) {
 		instanceStr := "instance BGP"
 		cliConfig = fmt.Sprintf(`
 				router bgp %v %s
@@ -439,13 +440,10 @@ func enableMultipath(t *testing.T, dut *ondatra.DUTDevice, maxpaths uint32, ipv4
 						address-family ipv6 unicast
 						multipath
 			`, dutAS, instanceStr, maxpaths, maxpaths, peerGrpName1)
-
-	default:
-		t.Logf("Unsupported vendor: %s", dut.Vendor())
+		t.Logf("Now applying CLI config for applicable vendor on DUT %s, sleep for 10 seconds", dut.Vendor())
+		helpers.GnmiCLIConfig(t, dut, cliConfig)
+		time.Sleep(10 * time.Second)
 	}
-	t.Logf("Now applying CLI config for applicable vendor on DUT %s, sleep for 10 seconds", dut.Vendor())
-	helpers.GnmiCLIConfig(t, dut, cliConfig)
-	time.Sleep(10 * time.Second)
 
 	if !deviations.IbgpMultipathPathUnsupported(dut) {
 		if deviations.EnableMultipathUnderAfiSafi(dut) {
