@@ -19,9 +19,11 @@ import (
 
 	"github.com/openconfig/featureprofiles/internal/deviations"
 	"github.com/openconfig/featureprofiles/internal/fptest"
+	"github.com/openconfig/featureprofiles/internal/helpers"
 	"github.com/openconfig/ondatra"
 	"github.com/openconfig/ondatra/gnmi"
 	"github.com/openconfig/ondatra/gnmi/oc"
+	"github.com/openconfig/ygot/ygot"
 )
 
 func TestMain(m *testing.M) {
@@ -38,6 +40,19 @@ func TestLeafListUpdate(t *testing.T) {
 			Type: oc.NetworkInstanceTypes_NETWORK_INSTANCE_TYPE_L3VRF,
 		}
 		gnmi.Update(t, dut, gnmi.OC().NetworkInstance("mgmt").Config(), ni)
+		// Register cleanup for NI (will run LAST, after DNS cleanup)
+		t.Cleanup(func() {
+			gnmi.Delete(t, dut, gnmi.OC().NetworkInstance("mgmt").Config())
+		})
+
+		// Register cleanup for the native reference that blocks VRF deletion (will run FIRST).
+		t.Cleanup(func() {
+			t.Logf("Cleaning up native Nokia DNS reference...")
+			// Delete the OpenConfig DNS config first.
+			gnmi.Delete(t, dut, gnmi.OC().System().Dns().Config())
+			// CRITICAL: Explicitly remove the native dns-instance entry via CLI.
+			helpers.GnmiCLIConfig(t, dut, "delete / system dns-instance mgmt")
+		})
 	}
 
 	// Configure the DNS search list to ["google.com"] using Replace.
