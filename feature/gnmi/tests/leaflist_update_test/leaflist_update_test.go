@@ -29,6 +29,15 @@ func TestMain(m *testing.M) {
 
 func TestLeafListUpdate(t *testing.T) {
 	dut := ondatra.DUT(t, "dut")
+	if deviations.DefaultNetworkInstance(dut) == "mgmt" {
+		// Nokia requires "mgmt" network instance to exist for DNS configuration.
+		t.Logf("Nokia requires 'mgmt' network instance for DNS configuration, creating it.")
+		ni := &oc.NetworkInstance{
+			Name: ygot.String("mgmt"),
+			Type: oc.NetworkInstanceTypes_NETWORK_INSTANCE_TYPE_L3VRF,
+		}
+		gnmi.Update(t, dut, gnmi.OC().NetworkInstance("mgmt").Config(), ni)
+	}
 
 	// Configure the DNS search list to ["google.com"] using Replace.
 	dnsConfig := &oc.System_Dns{}
@@ -41,6 +50,7 @@ func TestLeafListUpdate(t *testing.T) {
 	for _, s := range searchList {
 		if s == "google.com" {
 			found = true
+			t.Logf("Found google.com in search list: %v", searchList)
 			break
 		}
 	}
@@ -61,6 +71,7 @@ func TestLeafListUpdate(t *testing.T) {
 		for _, s := range finalSearchList {
 			if s == want {
 				found = true
+				t.Logf("Found %q in search list: %v", want, finalSearchList)
 				break
 			}
 		}
